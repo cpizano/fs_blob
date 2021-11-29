@@ -12,10 +12,12 @@ class BlobImpl : public Blob {
 };
 
 using BlobMap = std::unordered_map<uint64_t, BlobImpl*>;
+constexpr uint64_t max_id = (1ul << 32);
 
 class BlobStoreImpl : public BlobStore {
  public:
   BlobStoreImpl();
+  ~BlobStoreImpl();
   Blob* GetBlob(uint64_t) override;
   uint64_t GetFreeSpace() override;
 
@@ -27,6 +29,10 @@ BlobStoreImpl bs;
 
 BlobStoreImpl::BlobStoreImpl() {
   // Initialization goes here.
+}
+
+BlobStoreImpl::~BlobStoreImpl() {
+  // Termination goes here.
 }
 
 Blob* BlobStoreImpl::GetBlob(uint64_t id) {
@@ -41,7 +47,7 @@ Blob* BlobStoreImpl::GetBlob(uint64_t id) {
 }
 
 uint64_t BlobStoreImpl::GetFreeSpace() {
-  return 1024l;
+  return max_id;
 }
 
 BlobStore* GetBlobStore() {

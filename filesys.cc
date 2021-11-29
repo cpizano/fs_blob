@@ -1,4 +1,10 @@
 // filesys.cc
+//
+// From the requirements in main.cc it is clear that we can't simply load
+// a map<name_of_file, blob_id>.
+//
+// A blob is 2^18 bytes, so given space is 2^50 to 2^54 the number of
+// blobs is 2^32 to 2^36.
 
 #include "blob.h"
 
