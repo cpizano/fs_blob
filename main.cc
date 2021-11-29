@@ -2,11 +2,13 @@
 // see the README.txt file for more info.
 
 #include <string>
-
+#include "filesys.h"
 
 int main() {
-  int index = 0;
-  printf("what %d \n", index);
+
+  g::FILE* file = g::fopen("abcdef.txt", "rw");
+
 
   return 0;
 }
+

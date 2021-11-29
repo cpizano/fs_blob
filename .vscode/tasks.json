@@ -6,8 +6,11 @@
 			"label": "C/C++: g++ build active file",
 			"command": "/usr/bin/g++",
 			"args": [
+				"${fileDirname}/main.cc",
+				"${fileDirname}/filesys.cc",
+				"${fileDirname}/blob_impl.cc",
 				"-g",
-				"${file}",
+				"--std=c++17",
 				"-o",
 				"${fileDirname}/${fileBasenameNoExtension}"
 			],
