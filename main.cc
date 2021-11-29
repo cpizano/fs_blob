@@ -1,5 +1,6 @@
-// cpu@ 2021 report-of-reports generator
-// see the README.txt file for more info.
+// Interview problem: Given a Blob API that allows you to read and write
+// to storage, specified in blob.h, write a filesystem which satisfies
+// the C API specified in  filesys.h.
 
 #include <string>
 #include "filesys.h"

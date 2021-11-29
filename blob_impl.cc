@@ -15,6 +15,7 @@ using BlobMap = std::unordered_map<uint64_t, BlobImpl*>;
 
 class BlobStoreImpl : public BlobStore {
  public:
+  BlobStoreImpl();
   Blob* GetBlob(uint64_t) override;
   uint64_t GetFreeSpace() override;
 
@@ -24,8 +25,9 @@ class BlobStoreImpl : public BlobStore {
 
 BlobStoreImpl bs;
 
-
-/// Implementatation.
+BlobStoreImpl::BlobStoreImpl() {
+  // Initialization goes here.
+}
 
 Blob* BlobStoreImpl::GetBlob(uint64_t id) {
   auto item = bmap_.find(id);
@@ -51,9 +53,15 @@ const Data& BlobImpl::Get() {
 }
 
 int BlobImpl::Put(const Data& data) {
-  return -1;
+  if (data.size() > MaxBlobSize) {
+    return ErrBadArgs;
+  }
+
+  data_ = data;
+  return 0;
 }
 
 int BlobImpl::Release() {
+  // We don't delete, so the persistence is in memory.
   return 0;
 }
