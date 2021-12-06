@@ -90,48 +90,47 @@ struct FileEntry {
   uint64_t control_blob;
 };
 
-struct BlockHeader {
+struct Block {
   uint32_t type;
   uint32_t flags;
   uint64_t prev;
   uint64_t next;
 };
 
-struct ControlBlock {
+struct ControlBlock : public Block {
   static constexpr uint32_t type = (uint32_t)BlocTypes::Control;
   using entry = uint64_t;
-  BlockHeader header;
   uint64_t last_mod;
   uint64_t blobs[0];
 };
 
-struct DirBlock {
+static_assert(sizeof(ControlBlock) == (4 * 8u));
+
+struct DirBlock : public Block {
   static constexpr uint32_t type = (uint32_t)BlocTypes::Dir;
   using entry = FileEntry;
-  BlockHeader header;
   FileEntry entries[0];
 };
 
-struct DataBlock {
+static_assert(sizeof(DirBlock) == (3 * 8u));
+
+struct DataBlock : public Block {
   static constexpr uint32_t type = (uint32_t)BlocTypes::Data;
-  BlockHeader header;
   char data[0];
 };
 
-struct FILE {
-  size_t position;
-};
+static_assert(sizeof(DirBlock) == (3 * 8u));
 
-const BlockHeader* GetHeader(Blob* blob) {
-  if (blob->Get().size() < sizeof(BlockHeader)) {
+const Block* GetHeader(Blob* blob) {
+  if (blob->Get().size() < sizeof(Block)) {
     return nullptr;
   }
-  return reinterpret_cast<const BlockHeader*>(&(blob->Get()[0]));
+  return reinterpret_cast<const Block*>(&(blob->Get()[0]));
 }
 
 template <typename TBlock>
 const TBlock* GetBlock(Blob* blob) {
-  if (blob->Get().size() < sizeof(BlockHeader)) {
+  if (blob->Get().size() < sizeof(Block)) {
     TBlock block {TBlock::type, (uint32_t)Flags::New, 0, 0};
     Data data(sizeof(block));
     memcpy(&data[0], &block, sizeof(block));
@@ -141,7 +140,7 @@ const TBlock* GetBlock(Blob* blob) {
   }
 
   auto block = reinterpret_cast<const TBlock*>(&(blob->Get()[0]));
-  if (block->header.type != TBlock::type) {
+  if (block->type != TBlock::type) {
     return nullptr;
   }
 
@@ -317,6 +316,11 @@ uint64_t DirToControlBlock(BlockStream blobit, const std::string name, bool crea
 
   return 0;
 }
+
+
+struct FILE {
+  size_t position;
+};
 
 FILE* fopen(const char* filename, const char* mode) {
   std::string name(filename);
