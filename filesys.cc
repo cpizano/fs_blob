@@ -150,42 +150,25 @@ bool IsEoB(Blob* blob, const void* addr) {
   return addr >= reinterpret_cast<const void*>(last);
 }
 
+class FileSystem;
+
+// A chained set of blobs.
+class BlobIt {
+  public:
+  BlobIt(Blob* blob, FileSystem* fs) : blob_(blob), fs_(fs) {}
+  
+  bool IsValid() const { return blob_ != nullptr; }
+  Blob* operator()() const { return blob_; }
+  bool next();
+
+  private:
+  Blob* blob_;
+  FileSystem* const fs_;
+};
+
+
 class FileSystem {
  public:
-  // A chained set of blobs.
-  class BlobIt {
-   public:
-    BlobIt(Blob* blob, FileSystem* fs) : blob_(blob), fs_(fs) {}
-    
-    bool IsValid() const {
-      return blob_ != nullptr;
-    }
-
-    Blob* operator()() const {
-      return blob_;
-    }
-
-    bool next() {
-      if (blob_->Get().size() < sizeof(BlobHeader)) {
-        return false;
-      }
-      auto hdr = reinterpret_cast<const BlobHeader*>(&(blob_->Get()[0]));
-      if (hdr->next == 0) {
-        return false;
-      }
-      auto next = fs_->GetBlob(hdr->next);
-      if (next == nullptr) {
-        return false;
-      }
-      blob_ = next;
-      return true;
-    }
-
-   private:
-    Blob* blob_;
-    FileSystem* const fs_;
-  };
-
   BlobIt GetBlobIter(uint64_t id) {
     return BlobIt(GetBlob(id), this);
   }
@@ -205,6 +188,8 @@ class FileSystem {
   }
 
  private:
+  friend class BlobIt;
+
   Blob* GetBlob(uint64_t id) {
     auto it = ws_.find(id);
     if (it == ws_.end()) {
@@ -234,7 +219,24 @@ class FileSystem {
 } fs;
 
 
-uint64_t DirToControlBlock(FileSystem::BlobIt blobit, const std::string name, bool create) {
+bool BlobIt::next() {
+  if (blob_->Get().size() < sizeof(BlobHeader)) {
+    return false;
+  }
+  auto hdr = reinterpret_cast<const BlobHeader*>(&(blob_->Get()[0]));
+  if (hdr->next == 0) {
+    return false;
+  }
+  auto next = fs_->GetBlob(hdr->next);
+  if (next == nullptr) {
+    return false;
+  }
+  blob_ = next;
+  return true;
+}
+
+
+uint64_t DirToControlBlock(BlobIt blobit, const std::string name, bool create) {
   const DirBlock* dir;
 
   do {
