@@ -80,7 +80,7 @@ struct FileEntry {
   uint64_t control_blob;
 };
 
-struct BlobHeader {
+struct BlockHeader {
   uint32_t type;
   uint32_t flags;
   uint64_t prev;
@@ -90,7 +90,7 @@ struct BlobHeader {
 struct ControlBlock {
   static constexpr uint32_t type = (uint32_t)BlocTypes::Control;
   using entry = uint64_t;
-  BlobHeader header;
+  BlockHeader header;
   uint64_t last_mod;
   uint64_t blobs[0];
 };
@@ -98,13 +98,13 @@ struct ControlBlock {
 struct DirBlock {
   static constexpr uint32_t type = (uint32_t)BlocTypes::Dir;
   using entry = FileEntry;
-  BlobHeader header;
+  BlockHeader header;
   FileEntry entries[0];
 };
 
 struct DataBlock {
   static constexpr uint32_t type = (uint32_t)BlocTypes::Data;
-  BlobHeader header;
+  BlockHeader header;
   char data[0];
 };
 
@@ -115,7 +115,7 @@ struct FILE {
 
 template <typename TBlock>
 const TBlock* GetBlock(Blob* blob) {
-  if (blob->Get().size() < sizeof(BlobHeader)) {
+  if (blob->Get().size() < sizeof(BlockHeader)) {
     TBlock block {TBlock::type, (uint32_t)Flags::New, 0, 0};
     Data data(sizeof(block));
     memcpy(&data[0], &block, sizeof(block));
@@ -160,6 +160,7 @@ class BlobIt {
   bool IsValid() const { return blob_ != nullptr; }
   Blob* operator()() const { return blob_; }
   bool next();
+  int append();
 
   private:
   Blob* blob_;
@@ -220,10 +221,10 @@ class FileSystem {
 
 
 bool BlobIt::next() {
-  if (blob_->Get().size() < sizeof(BlobHeader)) {
+  if (blob_->Get().size() < sizeof(BlockHeader)) {
     return false;
   }
-  auto hdr = reinterpret_cast<const BlobHeader*>(&(blob_->Get()[0]));
+  auto hdr = reinterpret_cast<const BlockHeader*>(&(blob_->Get()[0]));
   if (hdr->next == 0) {
     return false;
   }
@@ -233,6 +234,13 @@ bool BlobIt::next() {
   }
   blob_ = next;
   return true;
+}
+
+int BlobIt::append() {
+  auto id = fs_->FreeBlobId();
+
+  // $fixme
+  return 0;
 }
 
 
