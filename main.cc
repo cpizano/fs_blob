@@ -9,7 +9,7 @@
 // Max file size: 2^40 bytes
 // Max number of files: 2^33
 // Max filename: 512 characters (printable ascii only)
-// Blob free space: 2^50 to 2^54 bytes (fixed)
+// Blob free space: 2^52 bytes (fixed)
 
 
 #include <string>

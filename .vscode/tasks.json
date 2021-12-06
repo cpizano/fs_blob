@@ -3,16 +3,16 @@
 	"tasks": [
 		{
 			"type": "cppbuild",
-			"label": "C/C++: g++ build active file",
+			"label": "C/C++: g++ build",
 			"command": "/usr/bin/g++",
 			"args": [
-				"${fileDirname}/main.cc",
-				"${fileDirname}/filesys.cc",
-				"${fileDirname}/blob_impl.cc",
+				"main.cc",
+				"filesys.cc",
+				"blob_impl.cc",
 				"-g",
 				"--std=c++17",
 				"-o",
-				"${fileDirname}/${fileBasenameNoExtension}"
+				"out/runner"
 			],
 			"options": {
 				"cwd": "${fileDirname}"

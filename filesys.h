@@ -2,6 +2,9 @@
 
 namespace g {
 
+#define MAX_PATH 512u
+
+
 struct FILE;
  
 // opens or creates a file, returns NULL if error
