@@ -48,11 +48,16 @@ class fnv32 {
 
 namespace g {
 
-// The design is as follows. Each file is comprised of
-// an entry on a directory block |FileEntry|, which points
-// to the control block |ControlBlock| for the file, which has the metadata
-// and the 
+// The design is as follows. 
+// Blobs are untyped data, as per problem statement. Blocks on the other hand
+// are typed structure on top of a Blob. Each block has a previous and a next
+// pointer so they form a BlockStream.
 
+// Each file is comprised of A |FileEntry| on a |DirBlock|, which points to
+// the |ControlBlock| for the file, which has the metadata
+// and the set of |DataBlock| that points to the blobs that contain the data
+//
+//
 // Free blocks are stored as a bitmap in the blocks 0 to BITMAP_RESERVED -1
 // where BITMAP_RESERVED is 2^34 / (2^18 * 2^3) = 2^11. at runtime they
 
@@ -112,6 +117,12 @@ struct FILE {
   size_t position;
 };
 
+const BlockHeader* GetHeader(Blob* blob) {
+  if (blob->Get().size() < sizeof(BlockHeader)) {
+    return nullptr;
+  }
+  return reinterpret_cast<const BlockHeader*>(&(blob->Get()[0]));
+}
 
 template <typename TBlock>
 const TBlock* GetBlock(Blob* blob) {
@@ -152,10 +163,10 @@ bool IsEoB(Blob* blob, const void* addr) {
 
 class FileSystem;
 
-// A chained set of blobs.
-class BlobIt {
+// A chained set of blocks.
+class BlockStream {
   public:
-  BlobIt(Blob* blob, FileSystem* fs) : blob_(blob), fs_(fs) {}
+  BlockStream(Blob* blob, FileSystem* fs) : blob_(blob), fs_(fs) {}
   
   bool IsValid() const { return blob_ != nullptr; }
   Blob* operator()() const { return blob_; }
@@ -170,8 +181,8 @@ class BlobIt {
 
 class FileSystem {
  public:
-  BlobIt GetBlobIter(uint64_t id) {
-    return BlobIt(GetBlob(id), this);
+  BlockStream GetBlobIter(uint64_t id) {
+    return BlockStream(GetBlob(id), this);
   }
 
   uint64_t FreeBlobId() {
@@ -189,7 +200,7 @@ class FileSystem {
   }
 
  private:
-  friend class BlobIt;
+  friend class BlockStream;
 
   Blob* GetBlob(uint64_t id) {
     auto it = ws_.find(id);
@@ -220,14 +231,12 @@ class FileSystem {
 } fs;
 
 
-bool BlobIt::next() {
-  if (blob_->Get().size() < sizeof(BlockHeader)) {
+bool BlockStream::next() {
+  auto hdr = GetHeader(blob_);
+  if (hdr == nullptr) {
     return false;
   }
-  auto hdr = reinterpret_cast<const BlockHeader*>(&(blob_->Get()[0]));
-  if (hdr->next == 0) {
-    return false;
-  }
+
   auto next = fs_->GetBlob(hdr->next);
   if (next == nullptr) {
     return false;
@@ -236,7 +245,12 @@ bool BlobIt::next() {
   return true;
 }
 
-int BlobIt::append() {
+int BlockStream::append() {
+  auto hdr = GetHeader(blob_);
+  if (hdr->next != 0) {
+    return -1;
+  }
+
   auto id = fs_->FreeBlobId();
 
   // $fixme
@@ -244,7 +258,7 @@ int BlobIt::append() {
 }
 
 
-uint64_t DirToControlBlock(BlobIt blobit, const std::string name, bool create) {
+uint64_t DirToControlBlock(BlockStream blobit, const std::string name, bool create) {
   const DirBlock* dir;
 
   do {
