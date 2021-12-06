@@ -52,11 +52,16 @@ namespace g {
 // Blobs are untyped data, as per problem statement. Blocks on the other hand
 // are typed structure on top of a Blob. Each block has a previous and a next
 // pointer so they form a BlockStream.
-
+//
 // Each file is comprised of A |FileEntry| on a |DirBlock|, which points to
 // the |ControlBlock| for the file, which has the metadata
 // and the set of |DataBlock| that points to the blobs that contain the data
 //
+// So:
+//  Blob --> Block --> BlockStream
+//
+// The |FileSystem| is in charge of implementing caching, garbage collection
+// and find free blobs (fast).
 //
 // Free blocks are stored as a bitmap in the blocks 0 to BITMAP_RESERVED -1
 // where BITMAP_RESERVED is 2^34 / (2^18 * 2^3) = 2^11. at runtime they
@@ -144,6 +149,12 @@ const TBlock* GetBlock(Blob* blob) {
 }
 
 template <typename TBlock>
+int ChainBlock(TBlock* last, Blob* next, uint64_t next_id) {
+  // $fixme
+  return 0;
+}
+
+template <typename TBlock>
 int AppendToBlock(const typename TBlock::entry& entry, Blob* blob) {
   Data new_data = blob->Get();
   auto old_size = new_data.size();
@@ -181,20 +192,26 @@ class BlockStream {
 
 class FileSystem {
  public:
-  BlockStream GetBlobIter(uint64_t id) {
+  BlockStream GetBlockIter(uint64_t id) {
     return BlockStream(GetBlob(id), this);
   }
 
-  uint64_t FreeBlobId() {
+  auto FreeBlob() {
     // $fixme, serialize used ids back to storage.
+    struct _ {
+      Blob* blob;
+      uint64_t id;
+    };
+
     auto next = used_ids_.empty() ? BITMAP_RESERVED : used_ids_.back();
     do {
       auto blob = GetBlob(next);
       if (blob->Get().empty()) {
         // it is free.
         used_ids_.push_back(next);
-        return next;
+        return _{blob, next};
       }
+
       next++;
     } while (true);
   }
@@ -251,7 +268,7 @@ int BlockStream::append() {
     return -1;
   }
 
-  auto id = fs_->FreeBlobId();
+  auto [new_blob, id] = fs_->FreeBlob();
 
   // $fixme
   return 0;
@@ -283,8 +300,10 @@ uint64_t DirToControlBlock(BlockStream blobit, const std::string name, bool crea
   }
 
   // We can create the file.
+  auto [_, id] = fs.FreeBlob();
+
   FileEntry entry{0};
-  entry.control_blob = 0, fs.FreeBlobId();
+  entry.control_blob = id;
   name.copy(entry.name, sizeof(entry.name));
 
   // Can we append to the last one?
@@ -301,7 +320,7 @@ uint64_t DirToControlBlock(BlockStream blobit, const std::string name, bool crea
 
 FILE* fopen(const char* filename, const char* mode) {
   std::string name(filename);
-  auto directory = fs.GetBlobIter(name_to_dir_id(name));
+  auto directory = fs.GetBlockIter(name_to_dir_id(name));
   if (!directory.IsValid()) {
     return nullptr;
   }
