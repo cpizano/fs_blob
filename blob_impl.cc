@@ -5,13 +5,14 @@ class BlobStoreImpl;
 
 class BlobImpl : public Blob {
  public:
-  const Data& Get() override;
+  BlobImpl(BlobStoreImpl* bs) : bs_(bs) {}
+  const Data& Get() const override;
   int Put(const Data& data) override;
   int Release() override;
 
  private:
   Data data_;
-  BlobStoreImpl* bs_;
+  BlobStoreImpl* const bs_;
 };
 
 using BlobMap = std::unordered_map<uint64_t, BlobImpl*>;
@@ -42,13 +43,13 @@ BlobStoreImpl::~BlobStoreImpl() {
 
 Blob* BlobStoreImpl::GetBlob(uint64_t id) {
   auto item = bmap_.find(id);
-  if (item == bmap_.end()) {
-    auto bs = new BlobImpl();
-    bmap_[id] = bs;
-    return bs;
+  if (item != bmap_.end()) {
+    return item->second;
   }
 
-  return item->second;
+  auto bs = new BlobImpl(this);
+  bmap_[id] = bs;
+  return bs;
 }
 
 uint64_t BlobStoreImpl::GetFreeSpace() {
@@ -65,7 +66,7 @@ BlobStore* GetBlobStore() {
   return &bs;
 }
 
-const Data& BlobImpl::Get() {
+const Data& BlobImpl::Get() const {
   return data_;
 }
 
