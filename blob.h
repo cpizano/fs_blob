@@ -1,6 +1,7 @@
 
 #include <vector>
 #include <stdint.h>
+#include <cstddef>
 
 
 using Data = std::vector<uint8_t>;
@@ -12,7 +13,7 @@ constexpr int ErrInternal = -3;
  
 class Blob {
  public:
-  virtual const Data& Get() =0;
+  virtual const Data& Get() const =0;
   virtual int Put(const Data& data) = 0;
   virtual int Release() = 0;
 };
