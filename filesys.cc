@@ -291,8 +291,8 @@ void finitialize() {
     // Init disk.
     meta = new META_DISK {{}, 1, DIR_HEADS + 1};
     memcpy(meta->magic, magic, sizeof(magic));
-    Data bytes(sizeof(meta));
-    memcpy(&bytes[0], &meta, sizeof(meta));
+    Data bytes(sizeof(META_DISK));
+    memcpy(&bytes[0], meta, sizeof(META_DISK));
     blob->Put(bytes);
   } else {
     // Validate disk.
