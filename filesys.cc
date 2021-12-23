@@ -11,15 +11,18 @@
 // (2^22 * 8) div 2^18 is 2^7 = number of blobs to store all blob ids of a file!
 // 2^33 files, 2^9 filename, so 2^42 div 2^18 = 2^24 blobs to just store all names!
 //
+// 2^18 div 2^9 = 2^9 -1 names per blob
 
 #include "filesys.h"
 
 #include <cstring>
 #include <string>
 #include <type_traits>
+#include <cassert>
 #include <unordered_map>
 
 #include "blob.h"
+#include "ref_counted.h"
 
 // FNV-1a hash for 32 bits.
 class fnv32 {
@@ -50,27 +53,27 @@ namespace g {
 
 // The design is as follows. 
 // Blobs are untyped data, as per problem statement. Blocks on the other hand
-// are typed structure on top of a Blob. Each block has a previous and a next
-// pointer so they form a BlockStream.
+// are typed structure on top of a Blob. Each metadata block has a previous and
+// a next pointer so they form a linked list.
 //
-// Each file is comprised of A |FileEntry| on a |DirBlock|, which points to
-// the |ControlBlock| for the file, which has the metadata
-// and the set of |DataBlock| that points to the blobs that contain the data
+// Each file is comprised of a |FileEntry| on a |DirBlock|, which points to
+// the |ControlBlock| for the file, which has the set of blob_ids that point
+// to the blobs that contain the data
 //
 // So:
-//  Blob --> Block --> BlockStream
+//  Blob --> Block --> FSNode
 //
-// The |FileSystem| is in charge of implementing caching, garbage collection
-// and find free blobs (fast).
+// Blob #0 is special, not used elsewhere (META_RESERVED)
+// Blob 1 to 2^10 are directory heads (DIR_HEADS)
+// Blob DIR_HEADS to 2^34 -1 is free for data and metadata.
 //
-// Free blocks are stored as a bitmap in the blocks 0 to BITMAP_RESERVED -1
-// where BITMAP_RESERVED is 2^34 / (2^18 * 2^3) = 2^11. at runtime they
+// meta block contains the next_block_id.
 
-constexpr uint32_t BITMAP_RESERVED = 1u << 11;
-constexpr uint32_t MODULUS_BLOB = 1u << 21;
+constexpr uint32_t META_RESERVED = 1u;
+constexpr uint32_t DIR_HEADS = (1u << 10) - 1;
 
 uint32_t name_to_dir_id(const std::string& name) {
-  return (fnv32()(name)% MODULUS_BLOB) + BITMAP_RESERVED;
+  return (fnv32()(name)% DIR_HEADS) + META_RESERVED;
 }
 
 enum class BlocTypes : uint32_t {
@@ -85,255 +88,121 @@ enum class Flags : uint32_t {
   New
 };
 
-struct FileEntry {
-  char name[MAX_PATH];
-  uint64_t control_blob;
-};
-
-struct Block {
+struct BlockHeader {
   uint32_t type;
   uint32_t flags;
   uint64_t prev;
   uint64_t next;
 };
 
-struct ControlBlock : public Block {
-  static constexpr uint32_t type = (uint32_t)BlocTypes::Control;
-  using entry = uint64_t;
-  uint64_t last_mod;
+struct ControlBlock : public BlockHeader {
+  static constexpr uint32_t btype = (uint32_t)BlocTypes::Control;
   uint64_t blobs[0];
 };
 
-static_assert(sizeof(ControlBlock) == (4 * 8u));
+static_assert(sizeof(ControlBlock) == (3 * 8u));
 
-struct DirBlock : public Block {
-  static constexpr uint32_t type = (uint32_t)BlocTypes::Dir;
-  using entry = FileEntry;
+struct FileEntry {
+  char name[MAX_PATH];
+  uint64_t control_blob;
+};
+
+struct DirBlock : public BlockHeader {
+  static constexpr uint32_t btype = (uint32_t)BlocTypes::Dir;
   FileEntry entries[0];
-};
 
-static_assert(sizeof(DirBlock) == (3 * 8u));
-
-struct DataBlock : public Block {
-  static constexpr uint32_t type = (uint32_t)BlocTypes::Data;
-  char data[0];
-};
-
-static_assert(sizeof(DirBlock) == (3 * 8u));
-
-const Block* GetHeader(Blob* blob) {
-  if (blob->Get().size() < sizeof(Block)) {
-    return nullptr;
-  }
-  return reinterpret_cast<const Block*>(&(blob->Get()[0]));
-}
-
-template <typename TBlock>
-const TBlock* GetBlock(Blob* blob) {
-  if (blob->Get().size() < sizeof(Block)) {
-    TBlock block {TBlock::type, (uint32_t)Flags::New, 0, 0};
-    Data data(sizeof(block));
-    memcpy(&data[0], &block, sizeof(block));
-    if (blob->Put(data) != 0) {
-      return nullptr;
-    }
-  }
-
-  auto block = reinterpret_cast<const TBlock*>(&(blob->Get()[0]));
-  if (block->type != TBlock::type) {
-    return nullptr;
-  }
-
-  return block;
-}
-
-template <typename TBlock>
-int ChainBlock(TBlock* last, Blob* next, uint64_t next_id) {
-  // $fixme
-  return 0;
-}
-
-template <typename TBlock>
-int AppendToBlock(const typename TBlock::entry& entry, Blob* blob) {
-  Data new_data = blob->Get();
-  auto old_size = new_data.size();
-  auto new_size = old_size + sizeof(typename TBlock::entry);
-  if (new_size > MaxBlobSize) {
-    return false;
-  }
-  new_data.resize(new_size);
-  memcpy(&new_data[old_size], &entry, sizeof(entry));
-  return blob->Put(new_data);
-}
-
-bool IsEoB(Blob* blob, const void* addr) {
-  auto last = &blob->Get()[blob->Get().size()];
-  return addr >= reinterpret_cast<const void*>(last);
-}
-
-class FileSystem;
-
-// A chained set of blocks.
-class BlockStream {
-  public:
-  BlockStream(Blob* blob, FileSystem* fs) : blob_(blob), fs_(fs) {}
-  
-  bool IsValid() const { return blob_ != nullptr; }
-  Blob* operator()() const { return blob_; }
-  bool next();
-  int append();
-
-  private:
-  Blob* blob_;
-  FileSystem* const fs_;
-};
-
-
-class FileSystem {
- public:
-  BlockStream GetBlockIter(uint64_t id) {
-    return BlockStream(GetBlob(id), this);
-  }
-
-  auto FreeBlob() {
-    // $fixme, serialize used ids back to storage.
-    struct _ {
-      Blob* blob;
-      uint64_t id;
-    };
-
-    auto next = used_ids_.empty() ? BITMAP_RESERVED : used_ids_.back();
-    do {
-      auto blob = GetBlob(next);
-      if (blob->Get().empty()) {
-        // it is free.
-        used_ids_.push_back(next);
-        return _{blob, next};
+  uint64_t find(const std::string& name, size_t blob_sz) const {
+    auto count = (blob_sz - sizeof(*this)) / sizeof(FileEntry);
+    for (size_t ix = 0; ix != count; ++ix) {
+      if (name.compare(entries[ix].name) == 0) {
+        return entries[ix].control_blob;
       }
-
-      next++;
-    } while (true);
+    }
+    return 0;
   }
+};
+
+static_assert(sizeof(DirBlock) == (3 * 8u));
+
+static_assert(sizeof(DirBlock) == (3 * 8u));
+
+template <typename T>
+const T* Blob2Block(Blob* blob) {
+  assert(blob->Get().size() >= sizeof(BlockHeader));
+  auto hdr = reinterpret_cast<const BlockHeader*>(&blob->Get()[0]);
+  assert(hdr->type == T::btype);
+  return static_cast<const T*>(hdr);
+}
+
+template <typename T>
+class FSNode : public RefCounted<FSNode<T>> {
+ public:
+  FSNode(uint64_t id) : id_(0u), blob_(nullptr) {
+    set_blob(id);
+    maybe_init();
+  }
+
+  const T* get_ro() {
+    return Blob2Block<T>(blob_);
+  }
+
+  bool next() {
+    if (get_ro()->next == 0) {
+      return false;
+    }
+    set_blob(get_ro()->next);
+    return true;
+  }
+
+  size_t size() const { return blob_->Get().size(); }
 
  private:
-  friend class BlockStream;
-
-  Blob* GetBlob(uint64_t id) {
-    auto it = ws_.find(id);
-    if (it == ws_.end()) {
-      auto blob = GetBlobStore()->GetBlob(id);
-      if (blob == nullptr) {
-        return nullptr;
-      }
-      live_blobs_++;
-      VBlob vb{0, blob};
-
-      it = ws_.insert({id, vb}).first;
+  void set_blob(uint64_t id) {
+    if (blob_) {
+      blob_->Release();
     }
-
-    it->second.hit_count++;
-    return it->second.blob;
+    blob_ = GetBlobStore()->GetBlob(id);
+    id_ = id;
   }
 
-  struct VBlob {
-    uint32_t hit_count;
-    Blob* blob;
-  };
-
-  std::unordered_map<uint64_t, VBlob> ws_;  // working set.
-  std::vector<uint64_t> used_ids_;
-
-  uint32_t live_blobs_ = 0;
-} fs;
-
-
-bool BlockStream::next() {
-  auto hdr = GetHeader(blob_);
-  if (hdr == nullptr) {
-    return false;
+  void maybe_init() {
+    if (blob_->Get().size() == 0) {
+      T header = {};
+      header.type = T::btype;
+      Data data;
+      data.resize(sizeof(header));
+      memcpy(&data[0], &header, sizeof(header));
+      blob_->Put(data);
+    }
   }
 
-  auto next = fs_->GetBlob(hdr->next);
-  if (next == nullptr) {
-    return false;
-  }
-  blob_ = next;
-  return true;
-}
+  uint64_t id_;
+  Blob* blob_;
+};
 
-int BlockStream::append() {
-  auto hdr = GetHeader(blob_);
-  if (hdr->next != 0) {
-    return -1;
-  }
-
-  auto [new_blob, id] = fs_->FreeBlob();
-
-  // $fixme
-  return 0;
-}
-
-
-uint64_t DirToControlBlock(BlockStream blobit, const std::string name, bool create) {
-  const DirBlock* dir;
-
+uint64_t GetControlBlob(RefPtr<FSNode<DirBlock>> dir, const std::string& name) {
   do {
-    dir = GetBlock<DirBlock>(blobit());
-    if (dir == nullptr) {
-      return 0;  // $fixme
+    auto cb_id = dir->get_ro()->find(name, dir->size());
+    if (cb_id) {
+      return cb_id;
     }
 
-    size_t ix = 0;
-    do {
-      if (dir->entries[ix].name == name) {
-        return dir->entries[ix].control_blob;
-      }
-      ++ix;
-    } while (!IsEoB(blobit(), &dir->entries[ix]));
+  } while (dir->next());
 
-  } while (blobit.next());
-
-  // No next block. If the file needs to exits we fail here.
-  if (!create) {
-    return 0u;
-  }
-
-  // We can create the file.
-  auto [_, id] = fs.FreeBlob();
-
-  FileEntry entry{0};
-  entry.control_blob = id;
-  name.copy(entry.name, sizeof(entry.name));
-
-  // Can we append to the last one?
-  
-  if (AppendToBlock<DirBlock>(entry, blobit()) == 0) {
-    return entry.control_blob;
-  }
-
-  // We need to chain a new blob.
-
-
+  // Not found. $$$
   return 0;
 }
-
 
 struct FILE {
   size_t position;
+  ControlBlock* cb;
 };
 
 FILE* fopen(const char* filename, const char* mode) {
   std::string name(filename);
-  auto directory = fs.GetBlockIter(name_to_dir_id(name));
-  if (!directory.IsValid()) {
-    return nullptr;
-  }
-
-  auto cb = DirToControlBlock(directory, name, true);
-  if (cb == 0) {
-
-
-  }
+  auto dir_id = name_to_dir_id(name);
+  auto dir = AdoptRef(new FSNode<DirBlock>(dir_id));
+  auto cb_id = GetControlBlob(std::move(dir), name);
 
   return nullptr;
 }
