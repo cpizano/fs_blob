@@ -35,4 +35,8 @@ long ftell(FILE* stream);
 // origin: 0 = from start, 1 = from end, 2 = from current position.
 long fseek(FILE* stream, long offset, int origin);
 
+// Called at the start and end of program.
+void finitialize();
+void ffinalize();
+
 }  // namespace g

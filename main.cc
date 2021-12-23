@@ -16,10 +16,11 @@
 #include "filesys.h"
 
 int main() {
+  g::finitialize();
 
   g::FILE* file = g::fopen("abcdef.txt", "rw");
 
-
+  g::ffinalize();
   return 0;
 }
 

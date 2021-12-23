@@ -63,14 +63,26 @@ namespace g {
 // So:
 //  Blob --> Block --> FSNode
 //
-// Blob #0 is special, not used elsewhere (META_RESERVED)
+// Blob #0 is special contains META_DISK.
 // Blob 1 to 2^10 are directory heads (DIR_HEADS)
 // Blob DIR_HEADS to 2^34 -1 is free for data and metadata.
 //
-// meta block contains the next_block_id.
+// meta block contains the next_free_blob_id.
 
 constexpr uint32_t META_RESERVED = 1u;
-constexpr uint32_t DIR_HEADS = (1u << 10) - 1;
+constexpr uint32_t DIR_HEADS = (1u << 10);
+
+constexpr char magic[16] = "vdisk2021-00001";
+
+struct META_DISK {
+  char magic[16];
+  uint64_t version;
+  uint64_t next_free;
+};
+
+META_DISK* g_meta = nullptr;
+
+uint64_t get_next_free_id() { return g_meta->next_free++; }
 
 uint32_t name_to_dir_id(const std::string& name) {
   return (fnv32()(name)% DIR_HEADS) + META_RESERVED;
@@ -96,6 +108,7 @@ struct BlockHeader {
 };
 
 struct ControlBlock : public BlockHeader {
+  typedef uint64_t Record;
   static constexpr uint32_t btype = (uint32_t)BlocTypes::Control;
   uint64_t blobs[0];
 };
@@ -108,6 +121,7 @@ struct FileEntry {
 };
 
 struct DirBlock : public BlockHeader {
+  typedef FileEntry Record;
   static constexpr uint32_t btype = (uint32_t)BlocTypes::Dir;
   FileEntry entries[0];
 
@@ -120,9 +134,8 @@ struct DirBlock : public BlockHeader {
     }
     return 0;
   }
-};
 
-static_assert(sizeof(DirBlock) == (3 * 8u));
+};
 
 static_assert(sizeof(DirBlock) == (3 * 8u));
 
@@ -134,6 +147,15 @@ const T* Blob2Block(Blob* blob) {
   return static_cast<const T*>(hdr);
 }
 
+bool WriteHeader(Blob* blob, BlockHeader hdr) {
+  assert(blob->Get().size() >= sizeof(BlockHeader));
+  Data data = blob->Get();
+  auto old_hdr = reinterpret_cast<BlockHeader*>(&data[0]);
+  assert(old_hdr->type == hdr.type);
+  *old_hdr = hdr;
+  return blob->Put(data);
+}
+
 template <typename T>
 class FSNode : public RefCounted<FSNode<T>> {
  public:
@@ -142,8 +164,35 @@ class FSNode : public RefCounted<FSNode<T>> {
     maybe_init();
   }
 
+  ~FSNode() {
+    blob_->Release();
+  }
+
+  bool set_next(uint64_t id) {
+    BlockHeader hdr = *Blob2Block<T>(blob_);
+    hdr.next = id;
+    return WriteHeader(blob_, hdr);
+  }
+
+  bool set_previous(uint64_t id) {
+    BlockHeader hdr = *Blob2Block<T>(blob_);
+    hdr.prev = id;
+    return WriteHeader(blob_, hdr);
+  }
+
   const T* get_ro() {
     return Blob2Block<T>(blob_);
+  }
+
+  bool append_record(const typename T::Record& rec) {
+    if (size() > (MaxBlobSize - sizeof(rec))) {
+      return false;
+    }
+
+    Data bytes = blob_->Get();
+    bytes.resize(bytes.size() + sizeof(rec));
+    memcpy(bytes.data(), &rec, sizeof(rec));
+    return (blob_->Put(bytes) == 0);
   }
 
   bool next() {
@@ -155,6 +204,7 @@ class FSNode : public RefCounted<FSNode<T>> {
   }
 
   size_t size() const { return blob_->Get().size(); }
+  uint64_t id() const { return id_; }
 
  private:
   void set_blob(uint64_t id) {
@@ -180,39 +230,118 @@ class FSNode : public RefCounted<FSNode<T>> {
   Blob* blob_;
 };
 
-uint64_t GetControlBlob(RefPtr<FSNode<DirBlock>> dir, const std::string& name) {
+template <typename T>
+RefPtr<FSNode<T>> ChainBlock(RefPtr<FSNode<T>> prev) {
+  auto new_block = AdoptRef(new FSNode<T>(get_next_free_id()));
+  new_block->set_previous(prev->id());
+  prev->set_next(new_block->id());
+  return new_block;
+}
+
+enum CbAction {
+  FileMustExist,
+  FileCreate,
+};
+
+
+RefPtr<FSNode<ControlBlock>> GetControlBlob(RefPtr<FSNode<DirBlock>> dir,
+                                            const std::string& name,
+                                            CbAction action) {
   do {
     auto cb_id = dir->get_ro()->find(name, dir->size());
     if (cb_id) {
-      return cb_id;
+      return AdoptRef(new FSNode<ControlBlock>(cb_id));;
     }
 
   } while (dir->next());
 
-  // Not found. $$$
+  // File entry not found.
+  if (action == FileMustExist) {
+    return 0;
+  }
+
+  // Create new control block and entry
+  auto ctrl_block = AdoptRef(new FSNode<ControlBlock>(get_next_free_id()));
+
+  FileEntry entry {};
+  entry.control_blob = ctrl_block->id();
+  name.copy(entry.name, sizeof(entry.name));
+
+  // Append to current directory
+  if (dir->append_record(entry)) {
+    return ctrl_block;
+  }
+
+  // Chain a new dir entry.
+  auto new_dir = ChainBlock(dir);
+
+  // Append to new dir entry.
+  if (new_dir->append_record(entry)) {
+    return ctrl_block;
+  }
+
   return 0;
+}
+
+void finitialize() {
+  META_DISK* meta = nullptr;
+
+  auto blob = GetBlobStore()->GetBlob(0u);
+  if (blob->Get().size() < sizeof(META_DISK)) {
+    // Init disk.
+    meta = new META_DISK {{}, 1, DIR_HEADS + 1};
+    memcpy(meta->magic, magic, sizeof(magic));
+    Data bytes(sizeof(meta));
+    memcpy(&bytes[0], &meta, sizeof(meta));
+    blob->Put(bytes);
+  } else {
+    // Validate disk.
+    auto actual = reinterpret_cast<const META_DISK*>(&blob->Get()[0]);
+    if (strcmp(actual->magic, magic) != 0) {
+      assert(false);
+    }
+    assert(actual->version == 1);
+    assert(actual->next_free > DIR_HEADS);
+    meta = new META_DISK {*actual};
+  }
+
+  blob->Release();
+  g_meta = meta;
+}
+
+void ffinalize() {
+  Data data(sizeof(META_DISK));
+  memcpy(&data[0], g_meta, sizeof(META_DISK));
+  auto blob = GetBlobStore()->GetBlob(0u);
+  blob->Put(data);
+  blob->Release();
+  delete g_meta;
 }
 
 struct FILE {
   size_t position;
-  ControlBlock* cb;
+  RefPtr<FSNode<ControlBlock>> cb;
 };
 
+
 FILE* fopen(const char* filename, const char* mode) {
+  CbAction action = ((mode[0] == 'w') || (mode[1] == 'w')) ?
+    FileCreate : FileMustExist;
+
   std::string name(filename);
   auto dir_id = name_to_dir_id(name);
   auto dir = AdoptRef(new FSNode<DirBlock>(dir_id));
-  auto cb_id = GetControlBlob(std::move(dir), name);
+  auto ctrl_block = GetControlBlob(std::move(dir), name, action);
+  if (!ctrl_block) {
+    return nullptr;
+  }
 
-  return nullptr;
+  return new FILE { 0, std::move(ctrl_block) };
 }
- 
-long fremove(const char* filename) {
-  return -1;
-}
- 
+
 long fclose(FILE* stream) {
-  return -1;
+  delete stream;
+  return 0;
 }
  
 long fread(FILE* stream, void *buffer, long count) {
@@ -228,6 +357,10 @@ long ftell(FILE* stream) {
 }
  
 long fseek(FILE* stream, long offset, int origin) {
+  return -1;
+}
+
+long fremove(const char* filename) {
   return -1;
 }
 
