@@ -190,8 +190,9 @@ class FSNode : public RefCounted<FSNode<T>> {
     }
 
     Data bytes = blob_->Get();
-    bytes.resize(bytes.size() + sizeof(rec));
-    memcpy(bytes.data(), &rec, sizeof(rec));
+    auto old_sz = bytes.size();
+    bytes.resize(old_sz + sizeof(rec));
+    memcpy(&bytes[old_sz], &rec, sizeof(rec));
     return (blob_->Put(bytes) == 0);
   }
 
