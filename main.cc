@@ -20,6 +20,8 @@ int main() {
 
   g::FILE* file = g::fopen("abcdef.txt", "rw");
 
+  g::fclose(file);
+
   g::ffinalize();
   return 0;
 }
