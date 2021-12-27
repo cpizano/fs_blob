@@ -58,16 +58,45 @@ namespace g {
 //
 // Each file is comprised of a |FileEntry| on a |DirBlock|, which points to
 // the |ControlBlock| for the file, which has the set of blob_ids that point
-// to the blobs that contain the data
+// to the blobs that contain the data.
+// 
+//  Both control blocks and directory blocks are chained (via prev, next).
 //
-// So:
-//  Blob --> Block --> FSNode
+// So code wise there is a hiearchy:
 //
+//                                | DirBlock
+//  Blob --> FSNode  <-- Block  <-|
+//                                | ControlBlock
+//
+//  File data is untyped, can only be found by being pointed
+//  from control blocks.
+//
+//
+// Disk layout:
 // Blob #0 is special contains META_DISK.
 // Blob 1 to 2^10 are directory heads (DIR_HEADS)
 // Blob DIR_HEADS to 2^34 -1 is free for data and metadata.
 //
 // meta block contains the next_free_blob_id.
+//
+//
+//  Structure traversal.
+//  
+//
+//  name --> (hash_fvn % DIR_HEADS) --> DirBlock
+//                                         |
+//                                         v
+//                                      DirBlock ---> ControlBlock
+//                                         |               |
+//                                         V               V            (data)
+//                                                     ControlBlock |---> Blob
+//                                                                  |---> Blob
+//
+//  1. Direct hashing points to the blob id (from 1 to DIR_HEADS - 1) that might
+//     contain the {name, control-id} pair. This is a sequential search of all
+//     chained directories.
+//  2. Once found, the control block points to the data id of the blob that contains
+//     the range of interest.
 
 constexpr uint32_t META_RESERVED = 1u;
 constexpr uint32_t DIR_HEADS = (1u << 10);
@@ -101,7 +130,7 @@ enum class Flags : uint32_t {
 };
 
 struct BlockHeader {
-  uint32_t type;
+  BlocTypes type;
   uint32_t flags;
   uint64_t prev;
   uint64_t next;
@@ -109,7 +138,7 @@ struct BlockHeader {
 
 struct ControlBlock : public BlockHeader {
   typedef uint64_t Record;
-  static constexpr uint32_t btype = (uint32_t)BlocTypes::Control;
+  static constexpr auto btype = BlocTypes::Control;
   uint64_t directory;
   uint64_t start;
   uint64_t blobs[0];
@@ -136,7 +165,7 @@ struct FileEntry {
 
 struct DirBlock : public BlockHeader {
   typedef FileEntry Record;
-  static constexpr uint32_t btype = (uint32_t)BlocTypes::Dir;
+  static constexpr auto btype = BlocTypes::Dir;
   FileEntry entries[0];
 
   // Find control block for file |name|.
