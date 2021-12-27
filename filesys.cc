@@ -443,7 +443,8 @@ long fwrite(FILE* stream, const void* buffer, long count) {
       }
     } else {
       if (!cb->next()) {
-        // New control block for this data range.
+        // New control block for this data range. This is needed because
+        // fseek is lazy.
         auto next_start = cb->get_ro()->start + 1;
         auto directory = cb->get_ro()->directory;
 
@@ -474,10 +475,18 @@ long fwrite(FILE* stream, const void* buffer, long count) {
 }
 
 long ftell(FILE* stream) {
-  return -1;
+  return stream->position;
 }
- 
+
 long fseek(FILE* stream, long offset, int origin) {
+  if (origin == 0) {
+    stream->position = offset;
+  } else if (origin == 2) {
+    stream->position += offset;
+  } else if (origin == 1) {
+    // $$ fixme: we need the file size here, or having a
+    // signed position in FILE.
+  }
   return -1;
 }
 
