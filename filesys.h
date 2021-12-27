@@ -1,9 +1,14 @@
+// cpu@google.com  oct 2021.
 // filesys.h
+//
+// This is the file IO API to implement.
+// assume that the application calls finitialize() at
+// the beggining of main() and ffinalize() at exit.
+//
 
 namespace g {
 
 #define MAX_PATH 512u
-
 
 struct FILE;
  

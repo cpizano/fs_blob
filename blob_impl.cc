@@ -52,7 +52,7 @@ class BlobStoreImpl : public BlobStore {
   uint64_t GetFreeSpace() override;
 
   int Store(const Data&, uint64_t id);
-
+  
  private:
   BlobMap bmap_;
   uint64_t free_space_ = 1u << 24;
@@ -85,7 +85,8 @@ uint64_t BlobStoreImpl::GetFreeSpace() {
 
 int BlobStoreImpl::Store(const Data& data, uint64_t id) {
   free_space_-= data.size();
-  // $fixme: actually store? or do it at Release() time.
+  // $fixme: store here do it at Release() time?
+  // for now just dump to stdio to help visualize.
   printf(">> 0x%x  sz: %zu\n", id, data.size());
   hexdump(&data[0], data.size());
 
