@@ -465,7 +465,9 @@ long fwrite(FILE* stream, const void* buffer, long count) {
     data.resize(offset + count);
   }
   memcpy(&data[offset], buffer, count);
-  if (blob->Put(data) != 0) {
+  auto res = blob->Put(data);
+  blob->Release();
+  if (res != 0) {
     // Strange error as well.
     return -2;
   }
