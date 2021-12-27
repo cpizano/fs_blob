@@ -18,9 +18,9 @@
 int main() {
   g::finitialize();
 
-  g::FILE* file = g::fopen("abcdef.txt", "rw");
-
-  g::fclose(file);
+  g::FILE* file_1 = g::fopen("abcdef.txt", "rw");
+  g::fwrite(file_1, "hello disk!", 11);
+  g::fclose(file_1);
 
   g::ffinalize();
   return 0;
