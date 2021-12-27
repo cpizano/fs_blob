@@ -110,10 +110,24 @@ struct BlockHeader {
 struct ControlBlock : public BlockHeader {
   typedef uint64_t Record;
   static constexpr uint32_t btype = (uint32_t)BlocTypes::Control;
+  uint64_t directory;
+  uint64_t start;
   uint64_t blobs[0];
+
+  // Find data block starting at |pos|.
+  uint64_t find(size_t pos, size_t blob_sz) const {
+    auto count = (blob_sz - sizeof(*this)) / sizeof(Record);
+    auto ix = pos / MaxBlobSize;
+    if (ix >= count) {
+      return 0;
+    }
+    return blobs[ix];
+  }
 };
 
-static_assert(sizeof(ControlBlock) == (3 * 8u));
+static_assert(sizeof(ControlBlock) == (5 * 8u));
+static constexpr size_t bytes_per_ctrl_block =
+  MaxBlobSize * ((MaxBlobSize - sizeof(ControlBlock))/ sizeof(ControlBlock::Record));
 
 struct FileEntry {
   char name[MAX_PATH];
@@ -125,8 +139,9 @@ struct DirBlock : public BlockHeader {
   static constexpr uint32_t btype = (uint32_t)BlocTypes::Dir;
   FileEntry entries[0];
 
+  // Find control block for file |name|.
   uint64_t find(const std::string& name, size_t blob_sz) const {
-    auto count = (blob_sz - sizeof(*this)) / sizeof(FileEntry);
+    auto count = (blob_sz - sizeof(*this)) / sizeof(Record);
     for (size_t ix = 0; ix != count; ++ix) {
       if (name.compare(entries[ix].name) == 0) {
         return entries[ix].control_blob;
@@ -147,10 +162,11 @@ const T* Blob2Block(Blob* blob) {
   return static_cast<const T*>(hdr);
 }
 
-bool WriteHeader(Blob* blob, BlockHeader hdr) {
+template <typename THeader>
+bool WriteHeader(Blob* blob, const THeader& hdr) {
   assert(blob->Get().size() >= sizeof(BlockHeader));
   Data data = blob->Get();
-  auto old_hdr = reinterpret_cast<BlockHeader*>(&data[0]);
+  auto old_hdr = reinterpret_cast<THeader*>(&data[0]);
   assert(old_hdr->type == hdr.type);
   *old_hdr = hdr;
   return blob->Put(data);
@@ -180,6 +196,12 @@ class FSNode : public RefCounted<FSNode<T>> {
     return WriteHeader(blob_, hdr);
   }
 
+  template <typename Func>
+  bool update_header(Func fn) {
+    auto new_header = fn(Blob2Block<T>(blob_));
+    return WriteHeader<T>(blob_, new_header);
+  }
+
   const T* get_ro() {
     return Blob2Block<T>(blob_);
   }
@@ -201,6 +223,14 @@ class FSNode : public RefCounted<FSNode<T>> {
       return false;
     }
     set_blob(get_ro()->next);
+    return true;
+  }
+
+  bool prev() {
+    if (get_ro()->prev == 0) {
+      return false;
+    }
+    set_blob(get_ro()->prev);
     return true;
   }
 
@@ -264,16 +294,22 @@ RefPtr<FSNode<ControlBlock>> GetControlBlob(RefPtr<FSNode<DirBlock>> dir,
   // Create new control block and entry
   auto ctrl_block = AdoptRef(new FSNode<ControlBlock>(get_next_free_id()));
 
+  ctrl_block->update_header([dir_id =  dir->id()](const ControlBlock* hdr){
+    ControlBlock new_hdr = *hdr;
+    new_hdr.directory = dir_id;
+    return new_hdr;
+  });
+
   FileEntry entry {};
   entry.control_blob = ctrl_block->id();
   name.copy(entry.name, sizeof(entry.name));
 
-  // Append to current directory
+  // Try append to current directory
   if (dir->append_record(entry)) {
     return ctrl_block;
   }
 
-  // Chain a new dir entry.
+  // Full dir blob. Chain a new dir entry.
   auto new_dir = ChainBlock(dir);
 
   // Append to new dir entry.
@@ -350,7 +386,62 @@ long fread(FILE* stream, void *buffer, long count) {
 }
  
 long fwrite(FILE* stream, const void* buffer, long count) {
-  return -1;
+  uint64_t start_ctrl_block = stream->position / bytes_per_ctrl_block;
+  size_t offset = stream->position % MaxBlobSize;
+  auto& cb = stream->cb;
+
+  if ((offset + count) > MaxBlobSize) {
+    // $$ fixme. support split writes.
+    return -1;
+  }
+
+  uint64_t data_blob_id = 0;
+  while (true) {
+    auto delta = start_ctrl_block - cb->get_ro()->start;
+
+    if (delta == 0) {
+      data_blob_id = cb->get_ro()->find(offset, cb->size());
+      if (data_blob_id == 0) {
+        data_blob_id =  get_next_free_id();
+        cb->append_record(data_blob_id);
+      }
+      break;
+
+    } else if (delta < 0) {
+      if (!cb->prev()) {
+        // Strange error! (until we support sparse files)
+        return -1;
+      }
+    } else {
+      if (!cb->next()) {
+        // New control block for this data range.
+        auto next_start = cb->get_ro()->start + 1;
+        auto directory = cb->get_ro()->directory;
+
+        cb = ChainBlock(cb);
+        cb->update_header([&next_start, &directory](const ControlBlock* hdr) {
+          ControlBlock new_header = *hdr;
+          new_header.start = next_start;
+          new_header.directory = directory;
+          return new_header;
+        });
+      }
+    }
+  };
+
+  auto blob = GetBlobStore()->GetBlob(data_blob_id);
+  auto data = blob->Get();
+  if (offset + count < data.size()) {
+    data.resize(offset + count);
+  }
+  memcpy(&data[offset], buffer, count);
+  if (blob->Put(data) != 0) {
+    // Strange error as well.
+    return -2;
+  }
+
+  stream->position += count;
+  return count;
 }
 
 long ftell(FILE* stream) {
