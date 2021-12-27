@@ -431,7 +431,7 @@ long fwrite(FILE* stream, const void* buffer, long count) {
 
   auto blob = GetBlobStore()->GetBlob(data_blob_id);
   auto data = blob->Get();
-  if (offset + count < data.size()) {
+  if (data.size() < (offset + count)) {
     data.resize(offset + count);
   }
   memcpy(&data[offset], buffer, count);
