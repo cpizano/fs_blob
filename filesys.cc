@@ -349,6 +349,46 @@ RefPtr<FSNode<ControlBlock>> GetControlBlob(RefPtr<FSNode<DirBlock>> dir,
   return 0;
 }
 
+Blob* GetDataBlob(RefPtr<FSNode<ControlBlock>>& cb, size_t position) {
+  uint64_t start_ctrl_block = position / bytes_per_ctrl_block;
+  size_t offset = position % bytes_per_ctrl_block;
+
+  while (true) {
+    auto delta = start_ctrl_block - cb->get_ro()->start;
+
+    if (delta == 0) {
+      auto data_blob_id = cb->get_ro()->find(offset, cb->size());
+      if (data_blob_id == 0) {
+        data_blob_id =  get_next_free_id();
+        cb->append_record(data_blob_id);
+      }
+
+      return GetBlobStore()->GetBlob(data_blob_id);
+
+    } else if (delta < 0) {
+      if (!cb->prev()) {
+        // Strange error! (until we support sparse files)
+        return nullptr;
+      }
+    } else {
+      if (!cb->next()) {
+        // New control block for this data range. This is needed because
+        // fseek is lazy.
+        auto next_start = cb->get_ro()->start + 1;
+        auto directory = cb->get_ro()->directory;
+
+        cb = ChainBlock(cb);
+        cb->update_header([&next_start, &directory](const ControlBlock* hdr) {
+          ControlBlock new_header = *hdr;
+          new_header.start = next_start;
+          new_header.directory = directory;
+          return new_header;
+        });
+      }
+    }
+  }
+}
+
 void finitialize() {
   META_DISK* meta = nullptr;
 
@@ -415,52 +455,11 @@ long fread(FILE* stream, void *buffer, long count) {
 }
  
 long fwrite(FILE* stream, const void* buffer, long count) {
-  uint64_t start_ctrl_block = stream->position / bytes_per_ctrl_block;
+  auto blob = GetDataBlob(stream->cb, stream->position);
   size_t offset = stream->position % MaxBlobSize;
-  auto& cb = stream->cb;
 
-  if ((offset + count) > MaxBlobSize) {
-    // $$ fixme. support split writes.
-    return -1;
-  }
-
-  uint64_t data_blob_id = 0;
-  while (true) {
-    auto delta = start_ctrl_block - cb->get_ro()->start;
-
-    if (delta == 0) {
-      data_blob_id = cb->get_ro()->find(offset, cb->size());
-      if (data_blob_id == 0) {
-        data_blob_id =  get_next_free_id();
-        cb->append_record(data_blob_id);
-      }
-      break;
-
-    } else if (delta < 0) {
-      if (!cb->prev()) {
-        // Strange error! (until we support sparse files)
-        return -1;
-      }
-    } else {
-      if (!cb->next()) {
-        // New control block for this data range. This is needed because
-        // fseek is lazy.
-        auto next_start = cb->get_ro()->start + 1;
-        auto directory = cb->get_ro()->directory;
-
-        cb = ChainBlock(cb);
-        cb->update_header([&next_start, &directory](const ControlBlock* hdr) {
-          ControlBlock new_header = *hdr;
-          new_header.start = next_start;
-          new_header.directory = directory;
-          return new_header;
-        });
-      }
-    }
-  };
-
-  auto blob = GetBlobStore()->GetBlob(data_blob_id);
   auto data = blob->Get();
+
   if (data.size() < (offset + count)) {
     data.resize(offset + count);
   }
