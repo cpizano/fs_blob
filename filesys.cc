@@ -131,7 +131,7 @@ enum class Flags : uint32_t {
 
 struct BlockHeader {
   BlocTypes type;
-  uint32_t flags;
+  Flags flags;
   uint64_t prev;
   uint64_t next;
 };
@@ -141,7 +141,7 @@ struct ControlBlock : public BlockHeader {
   static constexpr auto btype = BlocTypes::Control;
   uint64_t directory;
   uint64_t start;
-  uint64_t blobs[0];
+  Record blobs[0];
 
   // Find data block starting at |pos|.
   uint64_t find(size_t pos, size_t blob_sz) const {
@@ -166,7 +166,7 @@ struct FileEntry {
 struct DirBlock : public BlockHeader {
   typedef FileEntry Record;
   static constexpr auto btype = BlocTypes::Dir;
-  FileEntry entries[0];
+  Record entries[0];
 
   // Find control block for file |name|.
   uint64_t find(const std::string& name, size_t blob_sz) const {
