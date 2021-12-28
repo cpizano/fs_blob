@@ -117,7 +117,11 @@ int BlobImpl::Put(const Data& data) {
 }
 
 int BlobImpl::Release() {
+  #if 0
+  // if we had a persistence mechanism then we would
+  // free the blob about here.
   bs_->Free(data_, id_);
   delete this;
+  #endif
   return 0;
 }
