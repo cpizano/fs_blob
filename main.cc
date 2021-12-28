@@ -20,9 +20,13 @@
 int main() {
   g::finitialize();
 
-  g::FILE* file_1 = g::fopen("abcdef.txt", "rw");
+  constexpr auto name = "abcdef.txt";
+
+  auto file_1 = g::fopen(name, "rw");
   g::fwrite(file_1, "hello disk!", 11);
   g::fclose(file_1);
+
+  auto file_2 = g::fopen(name, "rw");
 
   g::ffinalize();
   return 0;
