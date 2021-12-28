@@ -17,18 +17,30 @@
 #include <string>
 #include "filesys.h"
 
+#define TEST(c, v) { if (!(c)) { printf("failed (%d) at line %d.\n", v, __LINE__); return -1; }}
+
 int main() {
   g::finitialize();
 
   constexpr auto name = "abcdef.txt";
+  constexpr auto data = "hello disk!";
 
   auto file_1 = g::fopen(name, "rw");
-  g::fwrite(file_1, "hello disk!", 11);
-  g::fclose(file_1);
+  TEST(file_1 != nullptr, 0);
+
+  long rc;
+
+  rc = g::fwrite(file_1, data, sizeof(data));
+  TEST(rc == sizeof(data), rc);
+
+  rc = g::fclose(file_1);
+  TEST(rc == 0, rc);
 
   auto file_2 = g::fopen(name, "rw");
+  TEST(file_2 != nullptr, 0);
 
   g::ffinalize();
+  printf("succesful run\n");
   return 0;
 }
 
