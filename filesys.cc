@@ -15,10 +15,11 @@
 
 #include "filesys.h"
 
+#include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <string>
 #include <type_traits>
-#include <cassert>
 #include <unordered_map>
 
 #include "blob.h"
@@ -449,12 +450,19 @@ long fclose(FILE* stream) {
   delete stream;
   return 0;
 }
- 
+
 long fread(FILE* stream, void *buffer, long count) {
-  return -1;
+  // TODO: handle multi-blob.
+  auto blob = GetDataBlob(stream->cb, stream->position);
+  size_t offset = stream->position % MaxBlobSize;
+  auto to_read = std::min(count, static_cast<long>(blob->Get().size() - offset));
+  memcpy(buffer, &blob->Get()[offset], to_read);
+  blob->Release();
+  return to_read;
 }
  
 long fwrite(FILE* stream, const void* buffer, long count) {
+  // TODO: handle multi-blob.
   auto blob = GetDataBlob(stream->cb, stream->position);
   size_t offset = stream->position % MaxBlobSize;
 
@@ -496,5 +504,3 @@ long fremove(const char* filename) {
 }
 
 }  // namespace g
-
-
