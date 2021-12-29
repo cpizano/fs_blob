@@ -17,7 +17,7 @@
 #include <string>
 #include "filesys.h"
 
-#define TEST(c, v) { if (!(c)) { printf("failed (%d) at line %d.\n", v, __LINE__); return -1; }}
+#define TEST(c, v) { if (!(c)) { printf("failed (%d) at line %d.\n", (v), __LINE__); return -1; }}
 
 int main() {
   g::finitialize();
@@ -32,6 +32,9 @@ int main() {
 
   rc = g::fwrite(file_1, data, sizeof(data));
   TEST(rc == sizeof(data), rc);
+
+  auto pos = g::ftell(file_1);
+  TEST(pos == sizeof(data), pos);
 
   rc = g::fclose(file_1);
   TEST(rc == 0, rc);
