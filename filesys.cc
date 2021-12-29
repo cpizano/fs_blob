@@ -74,7 +74,7 @@ namespace g {
 //
 //
 // Disk layout:
-// Blob #0 is special contains META_DISK.
+// Blob #0 is special, contains META_DISK.
 // Blob 1 to 2^10 are directory heads (DIR_HEADS)
 // Blob DIR_HEADS to 2^34 -1 is free for data and metadata.
 //
@@ -82,22 +82,51 @@ namespace g {
 //
 //
 //  Structure traversal.
-//  
 //
-//  name --> (hash_fvn % DIR_HEADS) --> DirBlock
-//                                         |
-//                                         v
-//                                      DirBlock ---> ControlBlock
-//                                         |               |
-//                                         V               V            (data)
-//                                                     ControlBlock |---> Blob
-//                                                                  |---> Blob
+//
+//                                |DirBlock
+//                                |DirBlock
+// (hash_fvn(name) % DIR_HEADS)-->|DirBlock-----\
+//                                              |
+//                                              v                     |---> Blob
+//                                            DirBlock-->ControlBlock |---> Blob
+//                                               |           |        | ...
+//                                               V           V        
+//                                                       ControlBlock |---> Blob
+//                                                                    |---> Blob
 //
 //  1. Direct hashing points to the blob id (from 1 to DIR_HEADS - 1) that might
 //     contain the {name, control-id} pair. This is a sequential search of all
 //     chained directories.
 //  2. Once found, the control block points to the data id of the blob that contains
-//     the range of interest.
+//     the range of interest. Given the maximun file size there are only 128 control
+//     blocks needed to define a file.
+//
+//  PROS:
+//  - Fairly simple approach
+//  - Fast start, only blob 0 needs to be read. Trivial memory overhead.
+//  - No overhead for the data stream of a file
+//  - Fast writes and reads from current position
+//  - No need for "free" or "busy" bitmaps
+//  - Easy to diagnose integrity of disk
+//
+//  CONS:
+//  - No transactions, not ACID
+//  - Each file has a fixed overhead of one blob, with 1 stored byte, 2 Blobs.
+//  - Seek + read or write can be slow
+//  - Opening gets slower with number of files
+//
+//  The cons except for the first can be solved with relatively
+//  small complexifications. If the Blob layer is ACID then it is possible
+//  to add transactions without a lot of changes.
+//
+// EASY TODOS
+// - None of the API entrypoints do basic validation
+// - Probably needs to mantain file size in the first control block
+//   and in the STREAM object
+// - Reads and writes only handle "one blob" case.
+// - Modular arithmetic needs to be verified for writes and reads
+
 
 constexpr uint32_t META_RESERVED = 1u;
 constexpr uint32_t DIR_HEADS = (1u << 10);
@@ -350,6 +379,7 @@ RefPtr<FSNode<ControlBlock>> GetControlBlob(RefPtr<FSNode<DirBlock>> dir,
   return 0;
 }
 
+// Note that this function mutates |cb|.
 Blob* GetDataBlob(RefPtr<FSNode<ControlBlock>>& cb, size_t position) {
   uint64_t start_ctrl_block = position / bytes_per_ctrl_block;
   size_t offset = position % bytes_per_ctrl_block;
@@ -493,10 +523,11 @@ long fseek(FILE* stream, long offset, int origin) {
   } else if (origin == 2) {
     stream->position += offset;
   } else if (origin == 1) {
-    // $$ fixme: we need the file size here, or having a
+    // TODO: we need the file size here, or having a
     // signed position in FILE.
+    return -1;
   }
-  return -1;
+  return 0;
 }
 
 long fremove(const char* filename) {
