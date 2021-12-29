@@ -7,7 +7,7 @@
 			"command": "/usr/bin/g++",
 			"args": [
 				"main.cc",
-				"filesys.cc",
+				"answer_1.cc",
 				"blob_impl.cc",
 				"-g",
 				"--std=c++17",
