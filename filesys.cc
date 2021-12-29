@@ -126,6 +126,7 @@ namespace g {
 //   and in the STREAM object
 // - Reads and writes only handle "one blob" case.
 // - Modular arithmetic needs to be verified for writes and reads
+// - fremove() not implemented.
 
 
 constexpr uint32_t META_RESERVED = 1u;
